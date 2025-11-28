@@ -1,0 +1,17 @@
+{
+  "name": "expo-whisper",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {},
+  "peerDependencies": {
+    "expo": "*",
+    "expo-file-system": "*",
+    "react": "*",
+    "react-native": "*",
+    "react-native-quick-base64": "*"
+  },
+  "devDependencies": {
+    "expo-modules-core": "*"
+  }
+}

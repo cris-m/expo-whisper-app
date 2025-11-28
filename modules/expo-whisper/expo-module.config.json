@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["ExpoWhisperModule"],
+    "podspecPath": "./ExpoWhisper.podspec"
+  },
+  "android": {
+    "modules": ["expo.modules.whisper.ExpoWhisperModule"]
+  }
+}

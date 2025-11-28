@@ -1,0 +1,152 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# ========== DEPENDENCIES ==========
+node_modules/
+yarn.lock
+package-lock.json
+
+# ========== EXPO & BUILD ==========
+.expo/
+.expo-shared/
+dist/
+web-build/
+build/
+expo-env.d.ts
+eas.json.local
+
+# ========== NATIVE BUILD ARTIFACTS ==========
+# iOS
+/ios/
+build/
+xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.ipa
+*.dSYM/
+
+# Android
+/android/
+.gradle/
+.kotlin/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# ========== NATIVE SIGNING & CERTIFICATES ==========
+# DO NOT COMMIT THESE - EVER
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
+*.csr
+*.cer
+*.crt
+*.mobileprovision
+*.entitlements
+
+# ========== METRO BUNDLER ==========
+.metro-health-check*
+
+# ========== DEBUG LOGS ==========
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+lerna-debug.*
+*.log
+logs/
+
+# ========== IDE & EDITOR ==========
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.AppleDouble
+.LSOverride
+*.sublime-workspace
+*.sublime-project
+.env.local.js
+
+# ========== ENVIRONMENT & SECRETS ==========
+# Local environment files - NEVER commit credentials
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ========== TYPESCRIPT ==========
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# ========== GENERATED FILES ==========
+/expo-modules.config.json
+.expo/plugins/
+
+# ========== TEMPORARY & CACHE ==========
+.cache/
+dist/
+coverage/
+.nyc_output/
+*.tmp
+tmp/
+temp/
+
+# ========== MODULE CACHE ==========
+ModuleCache.noindex/
+CompilationCache.noindex/
+SDKStatCaches.noindex/
+
+# ========== REACT NATIVE SPECIFIC ==========
+buck-out/
+.buckconfig.local
+.flowconfig.local
+.gradle
+gradle-wrapper.jar
+debug.keystore
+
+# ========== DEVICE SPECIFIC ==========
+# Simulator artifacts
+Simulator/
+*.xctest
+.Trash/
+
+# ========== XCODE ==========
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcconfig
+xcuserdata/
+xcshareddata/
+*.xcarchive
+
+# ========== OS FILES ==========
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.windows-build-tools/
+
+# ========== PROJECT SPECIFIC ==========
+# Model files (large binary files)
+*.bin
+!modules/expo-whisper/ggml-*.bin
+
+# Screenshot artifacts
+*.png
+*.jpg
+*.jpeg
+screenshot*
+
+# Documentation builds
+docs/_build/
+docs/.vuepress/dist/
