@@ -1,45 +1,45 @@
 # expo-whisper
 
-On-device speech-to-text for React Native using [whisper.cpp](https://github.com/ggerganov/whisper.cpp).
+Fast, private speech-to-text for React Native and Expo. Everything runs on your phone, no servers, no waiting, no cloud bills.
 
-## Features
+<img src="./assets/image.png" alt="expo-whisper demo" width="300" />
 
-- On-device transcription (no server needed)
-- Real-time transcription from microphone
-- Transcribe audio files
-- 12 models: tiny (75MB) to large-v3 (3.1GB)
-- Automatic model download and caching from HuggingFace
-- iOS and Android
-- GPU acceleration
-- TypeScript
+## What You Get
+
+- Speech-to-text that runs entirely on-device (no internet required)
+- Real-time transcription from your microphone
+- Transcribe audio files or raw audio buffers
+- 12 models to choose from (75MB tiny model up to 3.1GB for best accuracy)
+- Models auto-download from HuggingFace and cache locally
+- Works on both iOS and Android
+- GPU acceleration when available
+- Full TypeScript support
 
 ## Installation
 
-### Local Module (Current Setup)
-
-This is a local Expo module included in the whisperapp project. It's configured in `package.json`:
+This is a local Expo module in the whisperapp project. It's linked in `package.json` like this:
 
 ```json
 "expo-whisper": "file:./modules/expo-whisper"
 ```
 
-Simply import from your app:
+Import it in your code:
 
 ```typescript
 import { useWhisper, downloadModel, getModelPath } from 'expo-whisper';
 ```
 
-### Dependencies
+### You'll Need These Dependencies
 
 ```bash
 npm install expo-file-system react-native-quick-base64
 ```
 
-`react-native-quick-base64` is needed for audio buffer encoding/decoding. It's native, so it's much faster.
+The `react-native-quick-base64` package is native code that handles audio encoding/decoding way faster than the JavaScript version.
 
-### iOS Configuration
+### iOS: Add Microphone Permissions
 
-Add microphone permissions to `app.json`:
+Drop this in your `app.json`:
 
 ```json
 {
@@ -53,518 +53,479 @@ Add microphone permissions to `app.json`:
 }
 ```
 
-### Android Configuration
+### Android: Permissions Are Already Handled
 
-Permissions are handled automatically.
+Android permissions happen automatically, so you don't need to do anything.
+
+## Building It
+
+Since this includes native code (`expo-whisper`), you need to prebuild:
+
+```bash
+npm install
+npx expo prebuild --clean
+```
+
+Then run it on a device:
+
+```bash
+# iOS
+npx expo run:ios
+
+# Android
+npx expo run:android
+```
+
+**Important:** `npx expo start` (the dev server) won't work with native modules. You must use `prebuild` + `run:ios/android` to actually run the app.
 
 ## Quick Start
 
-### 1. Download & Initialize Model
+### Getting a Model
 
-Models download automatically from [HuggingFace](https://huggingface.co/ggerganov/whisper.cpp) and get cached locally.
+Models are stored locally on your device and download from [HuggingFace](https://huggingface.co/ggerganov/whisper.cpp) the first time you need them.
 
 ```typescript
-import { useWhisper, downloadModel, getModelPath, isModelDownloaded } from 'expo-whisper';
+import { Whisper, downloadModel, getModelPath, isModelDownloaded } from 'expo-whisper';
 
-export default function App() {
-  const whisper = useWhisper();
+// Check if you already have it
+const exists = await isModelDownloaded('tiny');
 
-  const initialize = async () => {
-    // Check if model is already downloaded
-    const exists = await isModelDownloaded('tiny');
+if (!exists) {
+  // Download it (about 75MB for the tiny model)
+  await downloadModel('tiny', (progress) => {
+    console.log(`Download: ${Math.round(progress * 100)}%`);
+  });
+}
 
-    if (!exists) {
-      // Automatically downloads from HuggingFace (~75MB for tiny model)
-      await downloadModel('tiny', (progress) => {
-        console.log(`Download progress: ${Math.round(progress * 100)}%`);
-      });
-    }
+// Get the local path and fire it up
+const modelPath = await getModelPath('tiny');
+const whisper = await Whisper.initialize({
+  modelPath,
+  useGpu: true
+});
+```
 
-    // Get the local path and initialize
-    const modelPath = getModelPath('tiny');
-    await whisper.initialize({ filePath: modelPath });
-  };
+**Available Models**:
+- tiny (75MB) - fast, works on anything
+- base (142MB) - good balance
+- small (466MB) - pretty accurate
+- medium (1.5GB) - very accurate
+- large-v3 (3.1GB) - best possible accuracy
 
-  const transcribe = async () => {
-    if (!whisper.isReady) return;
+## How to Use It
 
-    const result = await whisper.transcribeFile('/path/to/audio.wav', {
-      language: 'en',
-    });
+### Two Ways In
 
-    console.log('Transcription:', result.result);
-  };
+**Without React** (just plain JavaScript/TypeScript):
+```typescript
+import { Whisper } from 'expo-whisper';
 
-  return null; // UI implementation
+const whisper = await Whisper.initialize({ modelPath });
+const task = await whisper.transcribeFile(path);
+console.log(task.result?.text);
+```
+
+**React Hook** (way easier for React apps):
+```typescript
+import { useWhisper } from 'expo-whisper';
+
+const { transcribeFile, progress, result } = useWhisper({ modelPath });
+```
+
+### One Instance to Rule Them All
+
+The `Whisper` class is a singleton. Call `initialize()` twice and you get the same object back:
+
+```typescript
+const w1 = await Whisper.initialize({ modelPath });
+const w2 = await Whisper.initialize({ modelPath });
+// w1 === w2 ✓
+
+// If you want a fresh one, release first
+await w1.release();
+const w3 = await Whisper.initialize({ modelPath });  // New instance
+```
+
+### You Get Tasks Back, Not Just Results
+
+Every transcription method returns a `TranscriptionTask` that you can track:
+
+```typescript
+const task = await whisper.transcribeFile(path);
+
+// Check how it's going
+console.log(task.progress);        // 0-100
+console.log(task.status);         // 'processing', 'complete', error, etc.
+
+// Get the actual transcription
+console.log(task.result?.text);         // Full text
+console.log(task.result?.segments);     // Individual words with timings
+
+// Change your mind? Cancel it
+await task.cancel();
+```
+
+### Recording: Two Styles
+
+If you're recording from the microphone:
+
+| Method | Best For |
+|--------|----------|
+| `startRecording()` + `stopRecording()` | When you need full control (track progress, cancel mid-recording) |
+| `recordAndTranscribe()` | Simple case where you just want to record and get text back |
+
+Pick whichever fits your flow.
+
+### Handling Errors
+
+Wrap your transcription in a try-catch:
+
+```typescript
+try {
+  const task = await whisper.transcribeFile(path);
+  console.log(task.result?.text);
+} catch (error) {
+  console.error('Something went wrong:', error);
 }
 ```
 
-**Available Models**: tiny (75MB), base (142MB), small (466MB), medium (1.5GB), large-v3 (3.1GB) - [full list](#available-models)
-
-## Core Concepts
-
-Check the hook state before using transcription:
+Or check the task status after it finishes:
 
 ```typescript
-const whisper = useWhisper();
-
-if (whisper.isReady) {
-  // Safe to transcribe
-  await whisper.transcribeFile(path);
+const task = await whisper.transcribeFile(path);
+if (task.status === 'error') {
+  console.error('Transcription failed:', task.error?.message);
 }
+```
 
-// Available properties
-whisper.isReady           // Ready to transcribe
-whisper.isLoading        // Currently initializing
-whisper.modelPath        // Path to the model file
-whisper.isUsingGpu       // GPU is enabled
-whisper.error            // Any errors from init
+### Managing Tasks in Memory
+
+Tasks stick around in memory until you clean them up:
+
+```typescript
+// See what's currently running
+const active = whisper.getActiveTasks();
+
+// Get some stats
+const stats = whisper.getStats();
+// { active: 0, total: 5, completed: 4, failed: 1 }
+
+// Clean up tasks older than 1 hour (in milliseconds)
+whisper.cleanupCompletedTasks(3600000);
+
+// Or just clear everything that's done
+whisper.clearCompletedTasks();
+```
+
+### Real-time Transcription
+
+For live transcription from the mic:
+
+```typescript
+await whisper.startRealtime(300, {
+  language: 'en',
+  onSegment: (segment) => console.log(segment.text)
+});
+
+// Check state whenever you want
+console.log(whisper.isRealtimeActive());      // true/false
+console.log(whisper.getRealtimeText());       // what you've said so far
+console.log(whisper.getRealtimeSegments());   // individual words
+
+// Stop and get final result
+const task = await whisper.stopRealtime();
+console.log(task.result?.text);
+```
+
+**Note on Accuracy:** Real-time transcription trades accuracy for responsiveness. It processes audio in chunks to give instant feedback, so it sees less context than batch transcription. For better accuracy, use `recordAndTranscribe()` or record audio first then transcribe with `transcribeBuffer()`.
 
 ## API Reference
 
-### useWhisper Hook
+For the full, detailed API docs, check out [modules/expo-whisper/README.md](./modules/expo-whisper/README.md).
 
-Main hook for transcription. Returns state and methods.
-
-```typescript
-whisper.isLoading      // Initializing
-whisper.isReady        // Ready to transcribe
-whisper.isTranscribing // Running transcription
-whisper.isRecording    // Recording (real-time mode)
-whisper.transcript     // Current result
-whisper.segments       // Word-level segments with timing
-whisper.error          // Any errors
-whisper.isUsingGpu     // GPU enabled
-whisper.modelPath      // Path to model file
-```
-
-#### Methods
-
-##### initialize(options)
-
-Load a model and prepare for transcription.
+### The Whisper Class (If You're Not Using React)
 
 ```typescript
-await whisper.initialize({
-  filePath: '/path/to/model.bin',
-  useGpu: true,                  // optional
-  useCoreMLIos: true,            // optional
-  useFlashAttn: false,           // optional
-});
-```
+import { Whisper } from 'expo-whisper';
 
-##### transcribeFile(filePath, options)
+// Fire it up
+const whisper = await Whisper.initialize({ modelPath, useGpu: true });
 
-Transcribe an audio file.
+// Transcribe files or audio buffers
+const fileTask = await whisper.transcribeFile(path, options);
+const bufferTask = await whisper.transcribeBuffer(buffer, options);
 
-```typescript
-const result = await whisper.transcribeFile('/path/to/audio.wav', {
-  language: 'en',
-  translate: false,
-  temperature: 0.5,
-  onProgress: (p) => console.log(`${p}%`),
-});
+// Record from microphone
+await whisper.startRecording();
+const recordingTask = await whisper.stopRecording();
 
-console.log(result.result);    // Full transcript
-console.log(result.segments);  // Segments with timing
-```
+// Live transcription
+await whisper.startRealtime(300, { onSegment, onAudioLevel });
+const realtimeTask = await whisper.stopRealtime();
 
-Options: `language`, `translate`, `temperature`, `samplingStrategy` ('greedy'|'beamsearch'), `enableVad`, `vadThreshold`, `minSpeechDurationMs`, `minSilenceDurationMs`, `onProgress`, `onNewSegments`, and more.
+// Manage what's running
+whisper.getTask(taskId);
+whisper.getActiveTasks();
+whisper.getStats();
+whisper.cleanupCompletedTasks();
 
-##### transcribeBuffer(audioData, options)
-
-Transcribe audio from memory (no disk writes).
-
-```typescript
-const audioData = new Uint8Array(...);
-const result = await whisper.transcribeBuffer(audioData, {
-  language: 'en',
-});
-```
-
-Accepts `Uint8Array`, `ArrayBuffer`, or `Float32Array` in WAV format (16-bit PCM, 16kHz, mono).
-
-##### detectLanguage(filePath)
-
-Detect the language of an audio file.
-
-```typescript
-const detection = await whisper.detectLanguage('/path/to/audio.wav');
-
-console.log(detection.language);      // Language code ('en', 'es', etc.)
-console.log(detection.languageName);  // Full language name
-console.log(detection.confidence);    // Confidence score (0-1)
-```
-
-##### startLiveTranscription(options, onChunkComplete)
-
-Start real-time transcription from the microphone.
-
-```typescript
-await whisper.startLiveTranscription(
-  {
-    language: 'en',
-    temperature: 0.5,
-    chunkDurationMs: 15000,
-  },
-  (event) => {
-    console.log('Chunk:', event.chunk?.transcript);
-    console.log('Accumulated:', event.accumulatedTranscript);
-  }
-);
-```
-
-Chunks audio automatically and transcribes in real-time. Everything stays in RAM (no disk writes).
-
-##### stop()
-
-Stop current transcription or recording.
-
-```typescript
-await whisper.stop();
-```
-
-##### release()
-
-Free up the model from memory.
-
-```typescript
+// Clean up when you're done
 await whisper.release();
 ```
 
-##### clearTranscript()
-
-Clear the transcript.
+### useWhisper Hook (React Apps)
 
 ```typescript
-whisper.clearTranscript();
-```
-
-### Model Management
-
-#### downloadModel(model, onProgress?)
-
-Download a model from HuggingFace.
-
-```typescript
-const modelPath = await downloadModel('tiny', (progress) => {
-  console.log(`Downloaded: ${Math.round(progress * 100)}%`);
-});
-```
-
-Models download once and are cached locally. See [Available Models](#available-models) for all options.
-
-#### isModelDownloaded(model)
-
-Check if a model is already downloaded.
-
-```typescript
-const exists = await isModelDownloaded('tiny');
-```
-
-#### getModelPath(model)
-
-Get the file path for a model.
-
-```typescript
-const path = getModelPath('tiny');
-```
-
-#### getDownloadedModels()
-
-List downloaded models.
-
-```typescript
-const models = await getDownloadedModels();
-```
-
-#### deleteModel(model)
-
-Delete a model to free space.
-
-```typescript
-await deleteModel('tiny');
-```
-
-### Available Models
-
-Download from [HuggingFace](https://huggingface.co/ggerganov/whisper.cpp).
-
-| Model | Size | Best For |
-|-------|------|----------|
-| tiny | 75 MB | Mobile, fast |
-| tiny.en | 75 MB | English only, mobile |
-| base | 142 MB | Balanced |
-| base.en | 142 MB | English only, balanced |
-| small | 466 MB | Good accuracy |
-| small.en | 466 MB | English only, good accuracy |
-| medium | 1.5 GB | High accuracy |
-| medium.en | 1.5 GB | English only, high accuracy |
-| large-v1 | 2.9 GB | Best accuracy |
-| large-v2 | 2.9 GB | Best accuracy |
-| large-v3 | 3.1 GB | Best accuracy |
-| large-v3-turbo | 1.6 GB | Best accuracy, faster |
-
-Models are cached in `Documents/whisper-models/` (iOS) and the app's documents folder (Android).
-
-## Advanced Options
-
-### Real-Time Transcription
-
-```typescript
-await whisper.startLiveTranscription(
-  {
-    language: 'en',
-    chunkDurationMs: 5000,
-  },
-  (event) => {
-    console.log('Chunk:', event.chunk?.transcript);
-    console.log('Accumulated:', event.accumulatedTranscript);
-  }
-);
-
-await whisper.stop();
-```
-
-Audio stays in memory (no disk writes). ~32KB per second at 16kHz mono.
-
-### Temperature & Sampling
-
-```typescript
-await whisper.transcribeFile(path, {
-  temperature: 0.5,
-  samplingStrategy: 'greedy', // or 'beamsearch'
-  beamSearchBeamSize: 5,
-});
-```
-
-`temperature`: 0 = deterministic, 1+ = random
-
-### Voice Activity Detection
-
-```typescript
-await whisper.transcribeFile(path, {
-  enableVad: true,
-  vadThreshold: 0.6,
-  minSpeechDurationMs: 500,
-  minSilenceDurationMs: 300,
-});
-```
-
-### Word-Level Timing
-
-```typescript
-await whisper.transcribeFile(path, {
-  tokenTimestamps: true,
-  suppressBlank: true,
-  suppressNst: true,
-});
-```
-
-## Complete Examples
-
-### Example 1: Basic Workflow
-
-```typescript
-import React, { useState } from 'react';
-import { View, Button, Text, Alert } from 'react-native';
-import { useWhisper, downloadModel, getModelPath, isModelDownloaded } from 'expo-whisper';
-
-export default function BasicExample() {
-  const whisper = useWhisper();
-  const [status, setStatus] = useState('Not initialized');
-
-  const setup = async () => {
-    try {
-      setStatus('Preparing...');
-
-      // Check and download model
-      if (!await isModelDownloaded('tiny')) {
-        setStatus('Downloading model...');
-        await downloadModel('tiny');
-      }
-
-      // Initialize
-      const path = getModelPath('tiny');
-      await whisper.initialize({ filePath: path });
-
-      setStatus(`Ready - Model: ${whisper.modelPath}`);
-    } catch (error) {
-      Alert.alert('Error', String(error));
-    }
-  };
-
-  return (
-    <View style={{ padding: 20 }}>
-      <Text>{status}</Text>
-      <Button title="Setup" onPress={setup} />
-      <Button
-        title="Transcribe"
-        onPress={() => whisper.transcribeFile('/path/to/audio.wav')}
-        disabled={!whisper.isReady}
-      />
-    </View>
-  );
-}
-```
-
-### Example 2: Real-Time Transcription
-
-```typescript
-import React, { useState } from 'react';
-import { View, Button, Text, ScrollView } from 'react-native';
 import { useWhisper } from 'expo-whisper';
 
-export default function RealtimeExample() {
-  const whisper = useWhisper();
-  const [listening, setListening] = useState(false);
+const {
+  transcribeFile,
+  transcribeBuffer,
+  progress,
+  result,
+  error,
+  isLoading,
+  segments,
+  cancel,
+  reset,
+} = useWhisper({ modelPath, language: 'en' });
 
-  const startListening = async () => {
-    if (!whisper.isReady) return;
-
-    try {
-      await whisper.startLiveTranscription({ language: 'en' });
-      setListening(true);
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const stopListening = async () => {
-    await whisper.stop();
-    setListening(false);
-  };
-
-  return (
-    <View style={{ flex: 1, padding: 20 }}>
-      <Button
-        title={listening ? 'Listening...' : 'Start'}
-        onPress={listening ? stopListening : startListening}
-        color={listening ? 'red' : 'blue'}
-      />
-      <ScrollView style={{ flex: 1, marginTop: 20 }}>
-        <Text>{whisper.transcript}</Text>
-      </ScrollView>
-    </View>
-  );
-}
+// Now use these in your component
+await transcribeFile(path);
+console.log(result?.text);
 ```
 
-### Example 3: Advanced Configuration
+### useRealtimeTranscription Hook (React)
+
+For live mic transcription in React components:
 
 ```typescript
-import { useWhisper, downloadModel, getModelPath } from 'expo-whisper';
+const {
+  isRecording,
+  startRecording,
+  stopRecording,
+  segments,
+  interimText,
+  metrics,
+} = useRealtimeTranscription({ modelPath });
+```
 
-export default function AdvancedExample() {
-  const whisper = useWhisper();
+### Transcription Options
 
-  const transcribeWithOptions = async () => {
-    const result = await whisper.transcribeFile('/path/to/audio.wav', {
-      language: 'en',
-      translate: false,
-      temperature: 0.3,
-      samplingStrategy: 'beamsearch',
-      beamSearchBeamSize: 5,
-      enableVad: true,
-      vadThreshold: 0.5,
-      tokenTimestamps: true,
-      initialPrompt: 'transcribe technical content',
-      onProgress: (p) => console.log(`${p}% done`),
-    });
+You can tweak how transcription works:
 
-    console.log(result.result);
-    console.log('Segments:', result.segments);
-  };
-
-  return null;
+```typescript
+{
+  language: 'en' | 'auto' | ...     // What language to expect
+  temperature: number               // How "creative" the model is (0 = exact, 1+ = random)
+  translate: boolean                // Translate result to English (if the audio isn't in English)
+  maxTokens: number                 // Limit output length
+  suppressBlank: boolean            // Filter out silence
+  suppressNst: boolean              // Filter out special markers like [noise]
+  onProgress: (p: number) => void   // Callback as it processes (0-100)
+  onSegment: (s: Segment) => void   // Callback for each word/phrase
 }
 ```
 
-## Platform-Specific Details
+### Managing Models
+
+Models come from [HuggingFace](https://huggingface.co/ggerganov/whisper.cpp). They download and cache locally:
+
+```typescript
+import {
+  downloadModel,
+  isModelDownloaded,
+  getModelPath,
+  deleteModel,
+  MODEL_SIZES,
+} from 'expo-whisper';
+
+// Do you have it?
+if (!await isModelDownloaded('tiny')) {
+  // Nope, get it
+  await downloadModel('tiny', (progress) => {
+    console.log(`Downloading: ${(progress * 100).toFixed(0)}%`);
+  });
+}
+
+// Where is it?
+const path = await getModelPath('tiny');
+
+// Need the space back? Delete it
+await deleteModel('tiny');
+
+// What's available?
+console.log(MODEL_SIZES); // ['tiny', 'base', 'small', ...]
+```
+
+### All Available Models
+
+| Model | Size | Use When... |
+|-------|------|-------------|
+| tiny | 75 MB | Speed matters (mobile, low-end devices) |
+| tiny.en | 75 MB | Just English, fastest possible |
+| base | 142 MB | Good speed + accuracy balance |
+| base.en | 142 MB | Just English, balanced |
+| small | 466 MB | Want better accuracy |
+| small.en | 466 MB | Just English, pretty accurate |
+| medium | 1.5 GB | High accuracy (need a decent phone) |
+| medium.en | 1.5 GB | Just English, high accuracy |
+| large-v1 | 2.9 GB | Best accuracy (flagship phones only) |
+| large-v2 | 2.9 GB | Best accuracy (flagship phones only) |
+| large-v3 | 3.1 GB | Best accuracy, latest version |
+| large-v3-turbo | 1.6 GB | Best accuracy but faster than large |
+
+Models get cached in `Documents/whisper-models/` on iOS and your app's documents folder on Android.
+
+## Fine-Tuning Transcription
+
+### Beam Search for Better Accuracy
+
+```typescript
+const task = await whisper.transcribeFile(path, {
+  language: 'en',
+  temperature: 0.3,      // 0 = it's super literal, 1+ = it gets creative
+  beamSize: 5,           // search more possibilities (slower but more accurate)
+  translate: true,       // convert result to English
+});
+```
+
+### Voice Activity Detection (Filtering Out Noise)
+
+VAD filters your output so you get cleaner transcriptions:
+
+**`suppressBlank`** (default: on)
+- `true`: Removes silence - only actual speech
+- `false`: Includes empty spots between words
+
+**`suppressNst`** (default: on)
+- `true`: Clean, professional output (recommended for apps)
+- `false`: Includes special markers like [silence] and [noise]
+
+**What should you use?**
+
+```typescript
+const task = await whisper.transcribeFile(path, {
+  suppressBlank: true,   // Filter out silence
+  suppressNst: true,     // Filter out special markers
+});
+```
+
+| Use Case | suppressBlank | suppressNst | Result |
+|----------|--------------|------------|--------|
+| Production app | true | true | Just the words |
+| Debugging | false | false | Everything, including markers |
+| Transcription with context | false | true | All words, no markers |
+| Aggressive filtering | true | false | Filtered silence + markers |
+
+### Getting Callbacks as You Go
+
+Want progress updates or individual words as they're processed?
+
+```typescript
+const task = await whisper.transcribeFile(path, {
+  language: 'en',
+  onProgress: (progress) => console.log(`Done: ${progress}%`),
+  onSegment: (segment) => {
+    console.log(`${segment.start}s - ${segment.end}s: "${segment.text}"`);
+  },
+});
+```
+
+## See It in Action
+
+Check out [App.tsx](./App.tsx) for a working example. It shows how to:
+- Transcribe files
+- Transcribe audio buffers
+- Do real-time streaming
+- Cancel transcriptions mid-process
+- Handle errors properly
+
+## How It Works on Each Platform
 
 ### iOS
 
-- Models: `Documents/whisper-models/`
+- Models live in: `Documents/whisper-models/`
 - Audio format: WAV (16-bit PCM, 16kHz, mono)
-- GPU: Metal acceleration
-- Permissions: NSMicrophoneUsageDescription
+- Uses Metal GPU acceleration
+- Needs permission: NSMicrophoneUsageDescription
 
 ### Android
 
-- Models: App document directory
+- Models in the app's documents folder
 - Audio format: WAV (platform encoding)
-- GPU: NNAPI acceleration
-- Permissions: RECORD_AUDIO (automatic)
+- Uses NNAPI GPU acceleration
+- Permissions handled automatically
 
-## Performance Considerations
+## Making It Fast
 
-1. **Model Selection**: Smaller models are faster but less accurate
-2. **GPU Usage**: Automatically enabled when available
-3. **Memory**: Release context when done (`whisper.release()`)
-4. **Caching**: Models are cached locally after download
-5. **Real-Time**: Use smaller models for responsive live transcription
+- **Pick the right model**: tiny and base are blazing fast, large models are more accurate
+- **Enable GPU**: Set `useGpu: true` when initializing (it's automatic when available)
+- **Clean up**: Call `whisper.release()` when you're done to free memory
+- **Models cache locally**: After download, they're super fast to use
+- **Real-time transcription**: Use smaller models (tiny/base) for responsive live transcription
 
-## Troubleshooting
+## Stuck? Try These
 
-### Model Download Fails
+### Model Won't Download
 
-Check internet connection and available storage space.
+Check your internet connection and make sure you have space on the device.
 
-### Initialization Error
+### Can't Initialize
 
-Verify the model file path exists:
+Check that the model file actually exists:
 
 ```typescript
-const path = getModelPath('tiny');
+const path = await getModelPath('tiny');
 const exists = await isModelDownloaded('tiny');
 ```
 
-### Slow Transcription
+### Transcription Is Slow
 
-- Use smaller model (tiny, base)
-- Enable GPU: `useGpu: true`
-- Check device resources
-- Use real-time mode for streaming
+- Try a smaller model (tiny or base are quick)
+- Make sure GPU is enabled: `useGpu: true`
+- Check if your device has enough RAM
+- Real-time mode might feel faster for live input
 
-### Not Initialized
+### Microphone Issues
 
-Always check `isReady` before transcribing:
+**"Recording doesn't work"**
+- Check permissions: `await requestMicrophonePermissions()`
+- Test with the Voice Memos app to verify the mic works
+- Check your native logs to see if audio is being captured
 
-```typescript
-if (!whisper.isReady) {
-  console.error('Initialize first');
-  return;
-}
-```
-
-### Buffer Recording Issues
-
-**"No audio data captured"**
-- Check microphone permissions are granted
-- Ensure device microphone works (test with voice memo app)
-- Verify minimum 0.5 seconds of audio captured
-
-**"Audio conversion failed"** (iOS)
-- Resampling from hardware format (44.1kHz/48kHz) to 16kHz is automatic
-- Ensure AVAudioEngine is initialized before recording
-
-**"Buffer overflow"**
-- Chunk duration is auto-capped at 5 seconds (160KB max)
-- Reduce `chunkDurationMs` if needed
-- Monitor device memory on low-end devices
+**"Real-time isn't showing words"**
+- Check that `onSegment` callback is actually set up
+- Make sure `suppressBlank` and `suppressNst` aren't filtering everything out
+- Look at WhisperContext.swift NSLog statements to see if the callback is firing
 
 ## TypeScript Types
 
+If you want to type your code properly:
+
 ```typescript
+// The main stuff
 import type {
-  WhisperContextOptions,
-  TranscribeFileOptions,
-  TranscribeRealtimeOptions,
-  TranscribeResult,
-  TranscribeSegment,
-  ChunkedRealtimeEvent,
-  LanguageDetectionResult,
-  WhisperModelSize,
+  Whisper,                          // The class
+  TranscribeResult,                 // Result object
+  Segment,                          // Individual word/phrase
+  TranscriptionTask,                // Task you get back
+} from 'expo-whisper';
+
+// Configuration
+import type {
+  WhisperInitOptions,               // Options for initialize()
+  TranscribeOptions,                // Options for transcribe*()
+  WhisperModelSize,                 // 'tiny' | 'base' | etc
+} from 'expo-whisper';
+
+// React
+import type {
+  UseWhisperOptions,
+  UseWhisperReturn,
+  UseRealtimeTranscriptionOptions,
+  UseRealtimeTranscriptionReturn,
+  RealtimeMetrics,
 } from 'expo-whisper';
 ```
 

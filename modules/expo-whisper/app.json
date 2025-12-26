@@ -1,0 +1,8 @@
+{
+  "android": {
+    "package": "com.app.expowhisper"
+  },
+  "ios": {
+    "bundleIdentifier": "com.app.expowhisper"
+  }
+}

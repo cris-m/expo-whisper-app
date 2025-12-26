@@ -1,102 +1,60 @@
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
-apply plugin: 'maven-publish'
 
 group = 'expo.modules.whisper'
 version = '1.0.0'
 
-buildscript {
-  def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
-  if (expoModulesCorePlugin.exists()) {
-    apply from: expoModulesCorePlugin
-    applyKotlinExpoModulesCorePlugin()
-  }
-}
-
-afterEvaluate {
-  publishing {
-    publications {
-      release(MavenPublication) {
-        from components.release
-      }
-    }
-    repositories {
-      maven {
-        url = mavenLocal().url
-      }
-    }
-  }
-}
-
 android {
-  namespace "expo.modules.whisper"
-  compileSdkVersion safeExtGet("compileSdkVersion", 34)
+    compileSdkVersion 34
+    
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 34
+        versionCode 1
+        versionName "1.0"
+        
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++11 -frtti -fexceptions"
+                abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+            }
+        }
+    }
 
-  defaultConfig {
-    minSdkVersion safeExtGet("minSdkVersion", 24)
-    targetSdkVersion safeExtGet("targetSdkVersion", 34)
-    versionCode 1
-    versionName "1.0.0"
-
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+    
+    lintOptions {
+        abortOnError false
+    }
+    
     externalNativeBuild {
-      cmake {
-        cppFlags "-std=c++17 -O3 -DNDEBUG"
-        arguments "-DANDROID_STL=c++_shared"
-      }
+        cmake {
+            path "CMakeLists.txt"
+        }
     }
-
-    ndk {
-      abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+    
+    packagingOptions {
+        pickFirst 'lib/x86/libc++_shared.so'
+        pickFirst 'lib/x86_64/libc++_shared.so'
+        pickFirst 'lib/armeabi-v7a/libc++_shared.so'
+        pickFirst 'lib/arm64-v8a/libc++_shared.so'
     }
-  }
-
-  externalNativeBuild {
-    cmake {
-      path "src/main/jni/CMakeLists.txt"
-      version "3.22.1"
+    
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
     }
-  }
-
-  buildTypes {
-    release {
-      minifyEnabled false
+    
+    kotlinOptions {
+        jvmTarget = "11"
     }
-  }
-
-  lintOptions {
-    abortOnError false
-  }
-
-  publishing {
-    singleVariant("release") {
-      withSourcesJar()
-    }
-  }
-
-  compileOptions {
-    sourceCompatibility JavaVersion.VERSION_17
-    targetCompatibility JavaVersion.VERSION_17
-  }
-
-  kotlinOptions {
-    jvmTarget = '17'
-  }
-}
-
-repositories {
-  mavenCentral()
 }
 
 dependencies {
-  implementation project(':expo-modules-core')
-  implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:${getKotlinVersion()}"
-}
-
-def getKotlinVersion() {
-  def kotlin_version = rootProject.ext.has("kotlinVersion") ? rootProject.ext.get("kotlinVersion") : "1.9.23"
-  return kotlin_version
-}
-
-def safeExtGet(prop, fallback) {
-  rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+    implementation project(':expo-modules-core')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.23"
 }

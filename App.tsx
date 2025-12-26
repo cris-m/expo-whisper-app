@@ -12,35 +12,23 @@ import {
 } from 'react-native';
 import {
 	useWhisper,
+	Whisper,
 	downloadModel,
 	isModelDownloaded,
 	getModelPath,
-	WhisperModelSize,
-	MODEL_SIZES,
-	AudioRecorder,
 	requestMicrophonePermissions,
-} from './modules/expo-whisper';
+	WHISPER_MODELS,
+	MODEL_SIZES,
+	type WhisperModelSize,
+} from 'expo-whisper';
 
-const AVAILABLE_MODELS: WhisperModelSize[] = [
-	'tiny',
-	'tiny.en',
-	'base',
-	'base.en',
-	'small',
-	'small.en',
-	'medium',
-	'medium.en',
-	'large-v1',
-	'large-v2',
-	'large-v3',
-	'large-v3-turbo',
-];
+const AVAILABLE_MODELS = Object.keys(WHISPER_MODELS) as WhisperModelSize[];
 
 export default function App() {
 	const whisper = useWhisper();
-	// Use our own AudioRecorder class instead of useAudioRecorder hook
-	// to avoid expo-audio crash when getStatus() is called before prepare()
-	const audioRecorderRef = useRef<AudioRecorder | null>(null);
+	const transcriptScrollRef = useRef<ScrollView>(null);
+	const logsScrollRef = useRef<ScrollView>(null);
+	const contextIdRef = useRef<number | null>(null);
 
 	const [selectedModel, setSelectedModel] = useState<WhisperModelSize>('tiny');
 	const [downloadProgress, setDownloadProgress] = useState(0);
@@ -49,23 +37,31 @@ export default function App() {
 	const [hasPermission, setHasPermission] = useState(false);
 	const [isRecording, setIsRecording] = useState(false);
 	const [isRealtimeActive, setIsRealtimeActive] = useState(false);
+	const [audioLevel, setAudioLevel] = useState(0);
+	const [isInitialized, setIsInitialized] = useState(false);
+	const [whisperLibInstance, setWhisperLibInstance] = useState<Whisper | null>(null);
+	const [transcriptionResult, setTranscriptionResult] = useState<string>('Transcription will appear here...');
+
+	const realtimeOptions = {
+		language: 'en',
+		temperature: 0.0,
+		beamSize: 5,
+		translate: false,
+		maxTokens: 0,
+		suppressBlank: true,
+		suppressNst: true,
+	};
 
 	const log = useCallback((message: string) => {
 		setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`]);
 	}, []);
 
-	// Request microphone permission on mount
 	useEffect(() => {
 		(async () => {
 			const granted = await requestMicrophonePermissions();
 			setHasPermission(granted);
-			if (granted) {
-				log('Microphone permission granted');
-			} else {
-				log('Microphone permission denied');
-			}
 		})();
-	}, [log]);
+	}, []);
 
 
 	const handleDownloadModel = async () => {
@@ -74,11 +70,11 @@ export default function App() {
 			setDownloadProgress(0);
 			log(`Downloading ${selectedModel} model...`);
 
-			const modelPath = await downloadModel(selectedModel, (progress) => {
+			await downloadModel(selectedModel, (progress) => {
 				setDownloadProgress(progress);
 			});
 
-			log(`Model downloaded to: ${modelPath}`);
+			log('Model downloaded successfully');
 			setIsDownloading(false);
 		} catch (error) {
 			log(`Download error: ${error}`);
@@ -89,180 +85,178 @@ export default function App() {
 
 	const handleInitialize = async () => {
 		try {
-			const downloaded = await isModelDownloaded(selectedModel);
-			if (!downloaded) {
-				Alert.alert('Model Not Found', 'Please download the model first');
-				return;
+			log('Initializing model...');
+
+			let isDownloaded = await isModelDownloaded(selectedModel);
+			if (!isDownloaded) {
+				try {
+					await downloadModel(selectedModel, (progress) => {
+						setDownloadProgress(progress);
+					});
+					isDownloaded = true;
+				} catch (downloadError) {
+					log(`Failed to download model: ${downloadError}`);
+					Alert.alert('Download Failed', `Could not download ${selectedModel} model. Please try again.`);
+					return;
+				}
 			}
 
-			log(`Initializing ${selectedModel} model...`);
+			if (whisperLibInstance) {
+				try {
+					await whisperLibInstance.release();
+				} catch (releaseError) {
+					log(`Failed to release previous instance: ${releaseError}`);
+				}
+			}
+
 			const modelPath = getModelPath(selectedModel);
-			await whisper.initialize({ filePath: modelPath });
-			log(`Model initialized! GPU: ${whisper.isUsingGpu}`);
+			const whisperLib = await Whisper.initialize({
+				modelPath: modelPath,
+				useGpu: false,
+			});
+
+			setWhisperLibInstance(whisperLib);
+			contextIdRef.current = (whisperLib as any).contextId;
+			setIsInitialized(true);
+			log('Model initialized successfully');
 		} catch (error) {
-			log(`Init error: ${error}`);
+			log(`Initialization error: ${error}`);
+			setIsInitialized(false);
+			contextIdRef.current = null;
 			Alert.alert('Initialization Error', String(error));
 		}
 	};
 
 	const handleStartRecording = async () => {
-		if (!whisper.isReady) {
-			Alert.alert('Not Ready', 'Please initialize the model first');
+		if (!hasPermission) {
+			log('Microphone permission required');
+			Alert.alert('Permission Denied', 'Microphone permission is required');
 			return;
 		}
 
-		if (!hasPermission) {
-			const granted = await requestMicrophonePermissions();
-			if (!granted) {
-				Alert.alert('Permission Denied', 'Microphone permission is required');
-				return;
-			}
-			setHasPermission(true);
+		if (!isInitialized || !whisperLibInstance) {
+			log('Model not initialized');
+			Alert.alert('Model Not Ready', 'Please initialize the model first');
+			return;
 		}
 
 		try {
-			log('Starting recording (buffer mode)...');
+			log('Starting recording...');
+			const result = await whisperLibInstance.startRecording();
 
-			// Create a new AudioRecorder instance and set context ID
-			if (!whisper.id) {
-				Alert.alert('Error', 'Model context not initialized');
-				return;
+			if (result.recording) {
+				setIsRecording(true);
+				setAudioLevel(0);
 			}
-
-			if (!audioRecorderRef.current) {
-				audioRecorderRef.current = new AudioRecorder();
-				audioRecorderRef.current.setContextId(whisper.id);
-			}
-
-			await audioRecorderRef.current.start();
-			setIsRecording(true);
-			log('Recording started');
 		} catch (error) {
 			log(`Recording error: ${error}`);
+			setIsRecording(false);
 			Alert.alert('Recording Error', String(error));
 		}
 	};
 
 	const handleStopRecording = async () => {
+		if (!whisperLibInstance) {
+			setIsRecording(false);
+			return;
+		}
+
 		try {
 			log('Stopping recording...');
-
-			if (!audioRecorderRef.current) {
-				log('No recorder available');
-				return;
-			}
-
-			const audioData = await audioRecorderRef.current.stop();
 			setIsRecording(false);
+			setAudioLevel(0);
 
-			if (audioData && audioData.byteLength > 0) {
-				log(`Recording stopped: ${audioData.byteLength} bytes captured (buffer mode)`);
+			const task = await whisperLibInstance.stopRecording({
+				language: 'en',
+				temperature: 0.7,
+				beamSize: 5,
+				onProgress: (progress) => {
+					setAudioLevel(progress / 100);
+				},
+			});
 
-				log('Starting transcription...');
-
-				try {
-					// Transcribe directly from audio buffer (no file writes)
-					const result = await whisper.transcribeBuffer(audioData, {
-						language: 'en',
-						onProgress: (progress) => {
-							log(`Transcription progress: ${progress}%`);
-						},
-					});
-
-					log(`Transcription complete!`);
-					log(`Result: ${JSON.stringify(result)}`);
-
-					if (result && result.result) {
-						log(`Transcript: ${result.result.substring(0, 100)}`);
-					} else {
-						log('No transcription result received');
-					}
-				} catch (transcribeError) {
-					log(`Transcription error: ${transcribeError}`);
-					throw transcribeError;
-				}
-			} else {
-				log('No audio data available');
-			}
+			const text = task.result?.text || 'No text detected';
+			log('Transcription complete');
+			setTranscriptionResult(text);
 		} catch (error) {
+			log(`Error: ${error}`);
 			setIsRecording(false);
-			log(`Stop/Transcribe error: ${error}`);
 			Alert.alert('Error', String(error));
 		}
 	};
 
 	const handleRelease = async () => {
 		try {
-			await whisper.release();
-			log('Context released');
+			if (whisperLibInstance) {
+				await whisperLibInstance.release();
+				contextIdRef.current = null;
+				setWhisperLibInstance(null);
+				setIsInitialized(false);
+				log('Context released');
+			}
 		} catch (error) {
 			log(`Release error: ${error}`);
+			Alert.alert('Release Error', String(error));
 		}
 	};
 
 	const handleToggleRealtime = async () => {
-		if (!whisper.isReady) {
-			Alert.alert('Not Ready', 'Please initialize the model first');
-			return;
-		}
-
-		if (!hasPermission) {
-			const granted = await requestMicrophonePermissions();
-			if (!granted) {
-				Alert.alert('Permission Denied', 'Microphone permission is required');
+		if (isRealtimeActive) {
+			if (!whisperLibInstance) {
 				return;
 			}
-			setHasPermission(true);
-		}
 
-		// If already active, stop realtime transcription
-		if (isRealtimeActive) {
 			try {
-				log('Stopping realtime transcription...');
-				await whisper.stop();
+				log('Stopping realtime...');
 				setIsRealtimeActive(false);
-				log('Realtime transcription stopped');
+				setAudioLevel(0);
+
+				const task = await whisperLibInstance.stopRealtime();
+				if (task.result?.text) {
+					setTranscriptionResult(task.result.text);
+				}
+				log('Realtime stopped');
 			} catch (error) {
 				log(`Stop error: ${error}`);
 				setIsRealtimeActive(false);
-				Alert.alert('Error', String(error));
+				setAudioLevel(0);
 			}
 			return;
 		}
 
-		// Start chunked realtime transcription
+		if (!isInitialized || !whisperLibInstance) {
+			log('Model not initialized');
+			return;
+		}
+
 		try {
-			log('Starting realtime transcription - speak now! (buffer mode)');
+			log('Starting realtime...');
 			setIsRealtimeActive(true);
-			whisper.clearTranscript();
+			setTranscriptionResult('');
 
-			// Native layer handles microphone streaming + transcription
-			// Hook automatically updates whisper.transcript as chunks complete
-			await whisper.startLiveTranscription(
-				{
-					language: 'en',
-					translate: false,
-					chunkDurationMs: 3000, // 3 seconds per chunk for testing
+			await whisperLibInstance.startRealtime(300, {
+				...realtimeOptions,
+				onAudioLevel: (level) => {
+					setAudioLevel(level);
 				},
-				(event) => {
-					if (event.chunk) {
-						log(`Chunk ${event.currentChunkIndex}: "${event.chunk.transcript}"`);  
+				onSegment: (segment) => {
+					if (segment && segment.text) {
+						const startTime = segment.start ? (segment.start / 1000).toFixed(2) : '0.00';
+						const endTime = segment.end ? (segment.end / 1000).toFixed(2) : '0.00';
+						log(`[DEBUG] Segment object: ${JSON.stringify(segment)}`);
+					log(`[Segment] "${segment.text}" (${startTime}s - ${endTime}s)`);
+						setTranscriptionResult((prev) => {
+							const newText = prev + (prev ? ' ' : '') + segment.text;
+							return newText;
+						});
 					}
-					if (event.accumulatedTranscript) {
-						log(`Accumulated: "${event.accumulatedTranscript}"`);
-					}
-					if (!event.isCapturing) {
-						log('Realtime transcription finished');
-						setIsRealtimeActive(false);
-					}
-				}
-			);
+				},
+			});
 
-			log('Streaming from microphone...');
+			log('Realtime active');
 		} catch (error) {
-			log(`Realtime error: ${error}`);
+			log(`Start error: ${error}`);
 			setIsRealtimeActive(false);
-			Alert.alert('Error', String(error));
 		}
 	};
 
@@ -275,7 +269,6 @@ export default function App() {
 				<Text style={styles.subtitle}>On-device transcription with whisper.cpp</Text>
 			</View>
 
-			{/* Model Selection */}
 			<View style={styles.section}>
 				<Text style={styles.sectionTitle}>Select Model</Text>
 				<ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -304,7 +297,6 @@ export default function App() {
 				</ScrollView>
 			</View>
 
-			{/* Download Progress */}
 			{isDownloading && (
 				<View style={styles.progressContainer}>
 					<View style={[styles.progressBar, { width: `${downloadProgress * 100}%` }]} />
@@ -314,7 +306,6 @@ export default function App() {
 				</View>
 			)}
 
-			{/* Action Buttons */}
 			<View style={styles.section}>
 				<View style={styles.buttonRow}>
 					<TouchableOpacity
@@ -347,7 +338,7 @@ export default function App() {
 							isRecording ? styles.stopButton : styles.recordButton,
 						]}
 						onPress={isRecording ? handleStopRecording : handleStartRecording}
-						disabled={!whisper.isReady || whisper.isLoading}
+						disabled={!!whisper.isLoading || whisper.isLoading}
 					>
 						<Text style={styles.buttonText}>
 							{isRecording ? 'Stop & Transcribe' : 'Start Recording'}
@@ -357,7 +348,7 @@ export default function App() {
 					<TouchableOpacity
 						style={[styles.button, styles.releaseButton]}
 						onPress={handleRelease}
-						disabled={!whisper.isReady}
+						disabled={!!whisper.isLoading}
 					>
 						<Text style={styles.buttonText}>Release</Text>
 					</TouchableOpacity>
@@ -370,7 +361,7 @@ export default function App() {
 							isRealtimeActive ? styles.stopButton : styles.realtimeButton,
 						]}
 						onPress={handleToggleRealtime}
-						disabled={!whisper.isReady || whisper.isLoading}
+						disabled={!!whisper.isLoading || whisper.isLoading}
 					>
 						<Text style={styles.buttonText}>
 							{isRealtimeActive ? 'Stop Realtime' : 'Start Realtime'}
@@ -379,7 +370,24 @@ export default function App() {
 				</View>
 			</View>
 
-			{/* Status */}
+			{isRealtimeActive && (
+				<View style={styles.audioLevelContainer}>
+					<Text style={styles.audioLevelLabel}>Microphone Level</Text>
+					<View style={styles.levelMeterBackground}>
+						<View
+							style={[
+								styles.levelMeterFill,
+								{
+									width: `${audioLevel * 100}%`,
+									backgroundColor: audioLevel > 0.7 ? '#ff3b30' : audioLevel > 0.4 ? '#ff9500' : '#34c759',
+								},
+							]}
+						/>
+					</View>
+					<Text style={styles.audioLevelValue}>{Math.round(audioLevel * 100)}%</Text>
+				</View>
+			)}
+
 			<View style={styles.statusContainer}>
 				<View style={styles.statusRow}>
 					<View style={[styles.statusDot, hasPermission && styles.statusDotActive]} />
@@ -388,9 +396,9 @@ export default function App() {
 					</Text>
 				</View>
 				<View style={styles.statusRow}>
-					<View style={[styles.statusDot, whisper.isReady && styles.statusDotActive]} />
+					<View style={[styles.statusDot, !whisper.isLoading && styles.statusDotActive]} />
 					<Text style={styles.statusText}>
-						Model: {whisper.isReady ? 'Ready' : 'Not Initialized'}
+						Model: {!whisper.isLoading ? 'Ready' : 'Not Initialized'}
 					</Text>
 				</View>
 				{isRecording && (
@@ -399,28 +407,38 @@ export default function App() {
 						<Text style={styles.statusText}>Recording...</Text>
 					</View>
 				)}
-				{whisper.isTranscribing && (
+				{whisper.progress > 0 && whisper.progress < 100 && (
 					<View style={styles.statusRow}>
 						<ActivityIndicator size="small" color="#007AFF" />
-						<Text style={[styles.statusText, { marginLeft: 8 }]}>Transcribing...</Text>
+						<Text style={[styles.statusText, { marginLeft: 8 }]}>Transcribing ({Math.round(whisper.progress)}%)</Text>
 					</View>
 				)}
 			</View>
 
-			{/* Transcription Result */}
 			<View style={styles.resultContainer}>
 				<Text style={styles.resultTitle}>Transcription</Text>
-				<ScrollView style={styles.resultScroll}>
+				<ScrollView
+					ref={transcriptScrollRef}
+					style={styles.resultScroll}
+					onContentSizeChange={() =>
+						transcriptScrollRef.current?.scrollToEnd({ animated: true })
+					}
+				>
 					<Text style={styles.resultText}>
-						{whisper.transcript || 'Transcription will appear here...'}
+						{transcriptionResult}
 					</Text>
 				</ScrollView>
 			</View>
 
-			{/* Logs */}
 			<View style={styles.logsContainer}>
 				<Text style={styles.logsTitle}>Logs</Text>
-				<ScrollView style={styles.logsScroll}>
+				<ScrollView
+					ref={logsScrollRef}
+					style={styles.logsScroll}
+					onContentSizeChange={() =>
+						logsScrollRef.current?.scrollToEnd({ animated: true })
+					}
+				>
 					{logs.map((logMsg, index) => (
 						<Text key={index} style={styles.logText}>
 							{logMsg}
@@ -431,7 +449,7 @@ export default function App() {
 					style={styles.clearButton}
 					onPress={() => {
 						setLogs([]);
-						whisper.clearTranscript();
+						whisper.reset();
 					}}
 				>
 					<Text style={styles.clearButtonText}>Clear</Text>
@@ -452,7 +470,7 @@ const styles = StyleSheet.create({
 		marginBottom: 20,
 	},
 	title: {
-		fontSize: 24,
+		fontSize: 20,
 		fontWeight: 'bold',
 		color: '#fff',
 	},
@@ -463,10 +481,10 @@ const styles = StyleSheet.create({
 	},
 	section: {
 		paddingHorizontal: 20,
-		marginBottom: 16,
+		marginBottom: 8,
 	},
 	sectionTitle: {
-		fontSize: 16,
+		fontSize: 12,
 		fontWeight: '600',
 		color: '#fff',
 		marginBottom: 10,
@@ -521,7 +539,7 @@ const styles = StyleSheet.create({
 	buttonRow: {
 		flexDirection: 'row',
 		gap: 10,
-		marginBottom: 10,
+		marginBottom: 8,
 	},
 	button: {
 		flex: 1,
@@ -550,11 +568,8 @@ const styles = StyleSheet.create({
 	realtimeButton: {
 		backgroundColor: '#9c27b0',
 	},
-	bufferModeActive: {
-		backgroundColor: '#00bcd4',
-	},
-	bufferModeInactive: {
-		backgroundColor: '#4a4a6a',
+	testButton: {
+		backgroundColor: '#ff9800',
 	},
 	buttonText: {
 		color: '#fff',
@@ -563,11 +578,12 @@ const styles = StyleSheet.create({
 	},
 	statusContainer: {
 		paddingHorizontal: 20,
-		marginBottom: 16,
+		marginBottom: 12,
 	},
 	statusRow: {
 		flexDirection: 'row',
 		alignItems: 'center',
+		marginTop: 6,
 		marginBottom: 6,
 	},
 	statusDot: {
@@ -586,6 +602,37 @@ const styles = StyleSheet.create({
 	statusText: {
 		color: '#fff',
 		fontSize: 14,
+	},
+	audioLevelContainer: {
+		marginHorizontal: 20,
+		marginBottom: 10,
+		paddingHorizontal: 14,
+		paddingVertical: 8,
+		backgroundColor: '#2d2d44',
+		borderRadius: 8,
+	},
+	audioLevelLabel: {
+		color: '#888',
+		fontSize: 11,
+		fontWeight: '600',
+		marginBottom: 5,
+	},
+	levelMeterBackground: {
+		height: 10,
+		backgroundColor: '#1a1a2e',
+		borderRadius: 5,
+		overflow: 'hidden',
+		marginBottom: 4,
+	},
+	levelMeterFill: {
+		height: '100%',
+		borderRadius: 4,
+	},
+	audioLevelValue: {
+		color: '#666',
+		fontSize: 12,
+		textAlign: 'right',
+		fontWeight: '500',
 	},
 	resultContainer: {
 		flex: 1,

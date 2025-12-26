@@ -963,10 +963,9 @@ inline static ggml_fp16_t ggml_silu_f16(ggml_fp16_t x) {
     return GGML_CPU_FP32_TO_FP16(v/(1.0f + expf(-v)));
 }
 
-#if __FINITE_MATH_ONLY__
-#error "some routines in ggml.c require non-finite math arithmetics -- pass -fno-finite-math-only to the compiler to fix"
-#error "ref: https://github.com/ggml-org/llama.cpp/pull/7154#issuecomment-2143844461"
-#endif
+/* Note: #error for __FINITE_MATH_ONLY__ was removed for iOS CocoaPods compatibility */
+/* Original requirement: pass -fno-finite-math-only to the compiler */
+/* Ref: https://github.com/ggml-org/llama.cpp/pull/7154#issuecomment-2143844461 */
 
 /* Below function was borrowed from the GitHub repository:
 https://github.com/openvinotoolkit/openvino/blob/master/src/plugins/intel_cpu/src/nodes/kernels/scaled_attn/common.hpp */

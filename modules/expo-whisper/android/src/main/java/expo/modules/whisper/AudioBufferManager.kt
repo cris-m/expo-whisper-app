@@ -1,128 +1,149 @@
 package expo.modules.whisper
 
+import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.util.Base64
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * In-memory audio buffer manager for Android
- * Captures microphone audio directly to RAM without disk writes
- * Uses dynamic buffer to handle variable recording durations
- */
-class AudioBufferManager(private val maxDurationSeconds: Int = 30) {
+class AudioBufferManager {
     private var audioRecord: AudioRecord? = null
-    private var isRecording = false
-    private val sampleRate = 16000
-    private val channelConfig = AudioFormat.CHANNEL_IN_MONO
-    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-    private val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+    private var isRecording = AtomicBoolean(false)
+    private var recordingThread: Thread? = null
+    private val recordedData = ByteArrayOutputStream()
 
-    // Dynamic buffer that grows as needed
-    private val audioBuffer = ByteArrayOutputStream()
-    private val bufferLock = Any()
-
-    /**
-     * Start recording audio directly to memory
-     * @return true if started successfully
-     */
-    fun startRecording(): Boolean {
-        if (isRecording) return false
-
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            channelConfig,
-            audioFormat,
-            minBufferSize
-        ).apply {
-            startRecording()
+    @SuppressLint("MissingPermission")
+    fun startRecording(): String {
+        if (isRecording.get()) {
+            stopRecording()
         }
 
-        isRecording = true
-        synchronized(bufferLock) {
-            audioBuffer.reset()
-        }
+        val sampleRate = 16000
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        
+        val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+        val bufferSize = Math.max(minBufferSize, 4096)
 
-        // Start recording thread with proper buffer management
-        Thread {
-            val tempBuffer = ByteArray(minBufferSize)
-            val maxBytes = maxDurationSeconds * sampleRate * 2 // 16-bit = 2 bytes/sample
+        try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                bufferSize
+            )
 
-            while (isRecording) {
-                val read = audioRecord?.read(tempBuffer, 0, tempBuffer.size) ?: 0
-                if (read > 0) {
-                    synchronized(bufferLock) {
-                        if (audioBuffer.size() + read <= maxBytes) {
-                            audioBuffer.write(tempBuffer, 0, read)
-                        } else {
-                            // Stop recording if max buffer size reached
-                            isRecording = false
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                throw IOException("AudioRecord failed to initialize")
+            }
+
+            recordedData.reset()
+            isRecording.set(true)
+            audioRecord?.startRecording()
+
+            recordingThread = Thread {
+                val buffer = ShortArray(bufferSize / 2)
+
+                while (isRecording.get()) {
+                    val readResult = audioRecord?.read(buffer, 0, buffer.size) ?: -1
+                    if (readResult > 0) {
+                        val byteBuffer = ByteBuffer.allocate(readResult * 2)
+                        byteBuffer.order(ByteOrder.LITTLE_ENDIAN)
+                        for (i in 0 until readResult) {
+                            byteBuffer.putShort(buffer[i])
+                        }
+                        synchronized(recordedData) {
+                            recordedData.write(byteBuffer.array())
                         }
                     }
                 }
             }
-        }.start()
+            recordingThread?.start()
 
-        return true
+            return "buffer_${System.currentTimeMillis()}"
+        } catch (e: Exception) {
+            isRecording.set(false)
+            throw IOException("Failed to start recording: ${e.message}")
+        }
     }
 
-    /**
-     * Stop recording and return WAV data
-     * @return ByteArray containing WAV file data
-     */
-    fun stopRecording(): ByteArray {
-        if (!isRecording) throw IllegalStateException("Not recording")
+    fun stopRecording(): String? {
+        if (!isRecording.get()) return null
 
-        isRecording = false
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
-
-        // Get PCM data with thread safety
-        val pcmData: ByteArray
-        synchronized(bufferLock) {
-            pcmData = audioBuffer.toByteArray()
+        isRecording.set(false)
+        try {
+            recordingThread?.join(1000)
+        } catch (e: InterruptedException) {
+            e.printStackTrace()
         }
 
-        return encodeToWav(pcmData)
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        audioRecord = null
+        recordingThread = null
+
+        val pcmData: ByteArray
+        synchronized(recordedData) {
+            pcmData = recordedData.toByteArray()
+            recordedData.reset()
+        }
+
+        if (pcmData.isEmpty()) {
+            return null
+        }
+
+        val wavData = encodePCMToWAV(pcmData)
+        return Base64.encodeToString(wavData, Base64.NO_WRAP)
     }
 
-    /**
-     * Encode PCM data to WAV format in memory
-     */
-    private fun encodeToWav(pcmData: ByteArray): ByteArray {
-        val wavHeader = createWavHeader(pcmData.size)
-        return wavHeader + pcmData
-    }
+    private fun encodePCMToWAV(pcmData: ByteArray): ByteArray {
+        val sampleRate = 16000
+        val channels = 1
+        val bitsPerSample = 16
+        val byteRate = sampleRate * channels * bitsPerSample / 8
+        val blockAlign = channels * bitsPerSample / 8
+        
+        val headerSize = 44
+        val totalDataLen = pcmData.size + headerSize - 8
+        val totalAudioLen = pcmData.size
 
-    /**
-     * Create WAV header for PCM data
-     */
-    private fun createWavHeader(dataLength: Int): ByteArray {
-        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+        val header = ByteBuffer.allocate(headerSize)
+        header.order(ByteOrder.LITTLE_ENDIAN)
 
-        // RIFF chunk
-        header.put("RIFF".toByteArray())
-        header.putInt(36 + dataLength)
-        header.put("WAVE".toByteArray())
+        header.put("RIFF".toByteArray(Charsets.US_ASCII))
+        header.putInt(totalDataLen)
+        header.put("WAVE".toByteArray(Charsets.US_ASCII))
 
-        // fmt subchunk
-        header.put("fmt ".toByteArray())
-        header.putInt(16) // PCM format
-        header.putShort(1) // Audio format (PCM)
-        header.putShort(1) // Number of channels (mono)
+        header.put("fmt ".toByteArray(Charsets.US_ASCII))
+        header.putInt(16)
+        header.putShort(1.toShort())
+        header.putShort(channels.toShort())
         header.putInt(sampleRate)
-        header.putInt(sampleRate * 2) // Byte rate
-        header.putShort(2) // Block align
-        header.putShort(16) // Bits per sample
+        header.putInt(byteRate)
+        header.putShort(blockAlign.toShort())
+        header.putShort(bitsPerSample.toShort())
 
-        // data subchunk
-        header.put("data".toByteArray())
-        header.putInt(dataLength)
+        header.put("data".toByteArray(Charsets.US_ASCII))
+        header.putInt(totalAudioLen)
 
-        return header.array()
+        val wavStream = ByteArrayOutputStream()
+        try {
+            wavStream.write(header.array())
+            wavStream.write(pcmData)
+        } catch (e: IOException) {
+            e.printStackTrace()
+        }
+
+        return wavStream.toByteArray()
     }
 }

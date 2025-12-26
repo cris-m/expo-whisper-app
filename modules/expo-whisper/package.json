@@ -1,17 +1,51 @@
 {
   "name": "expo-whisper",
   "version": "1.0.0",
+  "description": "On-device speech-to-text using whisper.cpp for Expo/React Native",
   "main": "index.ts",
   "types": "index.ts",
-  "scripts": {},
-  "peerDependencies": {
-    "expo": "*",
-    "expo-file-system": "*",
-    "react": "*",
-    "react-native": "*",
-    "react-native-quick-base64": "*"
+  "files": [
+    "src/",
+    "index.ts",
+    "expo-module.config.json",
+    "ios/",
+    "android/",
+    "cpp/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "test": "jest",
+    "lint": "eslint src/",
+    "prepublish": "npm run build",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-native": "^0.81.5",
+    "expo": "~54.0.25"
   },
   "devDependencies": {
-    "expo-modules-core": "*"
-  }
+    "@types/react": "^19.1.0",
+    "@types/react-native": "^0.73.0",
+    "typescript": "^5.9.2"
+  },
+  "peerDependencies": {
+    "expo": "~54.0.25",
+    "react": "^19.1.0",
+    "react-native": "^0.81.5"
+  },
+  "keywords": [
+    "expo",
+    "react-native",
+    "speech-to-text",
+    "whisper",
+    "audio",
+    "transcription",
+    "on-device"
+  ],
+  "author": "",
+  "license": "MIT"
 }
