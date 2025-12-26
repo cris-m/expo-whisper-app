@@ -146,6 +146,8 @@ Thumbs.db
 *.jpg
 *.jpeg
 screenshot*
+# Exception: include demo image
+!assets/image.png
 
 # Documentation builds
 docs/_build/
